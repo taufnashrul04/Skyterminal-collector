@@ -1,0 +1,21 @@
+[Unit]
+Description=Skyterminal public market collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/skyterminal-collector
+Environment=DB_PATH=/root/skyterminal-collector/data/skyterminal.db
+Environment=HOST=127.0.0.1
+Environment=PORT=4180
+ExecStart=/usr/bin/env node src/service.js
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+{
+  "name": "skyterminal-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=26.7.0" },
+  "scripts": {
+    "test": "node --test",
+    "check": "for f in src/*.js test/*.js; do node --check \"$f\" || exit 1; done",
+    "start": "node src/service.js",
+    "smoke": "node src/smoke.js"
+  }
+}

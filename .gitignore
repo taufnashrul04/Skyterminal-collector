@@ -1,0 +1,18 @@
+# Runtime data and local state
+data/*.db
+data/*.db-*
+run/*.log
+run/*.pid
+
+# Local tunnel binaries and credentials
+bin/cloudflared
+.env
+.env.*
+*.pem
+*.key
+*.ppk
+
+# Node/tool caches
+node_modules/
+.npm/
+.DS_Store
