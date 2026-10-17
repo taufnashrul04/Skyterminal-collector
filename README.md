@@ -12,7 +12,7 @@ SMOKE_SECONDS=25 npm run smoke  # bounded public-feed probe
 bin/start-detached.sh           # nohup launcher; PID/log under run/
 ```
 
-Environment: `DB_PATH`, `HOST` (default `127.0.0.1`), `PORT` (default `4180`), and `SMOKE_SECONDS` (default 25). The systemd template is `ops/skyterminal-collector.service`; it is not installed automatically.
+Environment: `DB_PATH`, `HOST` (default `127.0.0.1`), `PORT` (default `4180`), `COLLECTOR_API_TOKEN` (optional bearer token), and `SMOKE_SECONDS` (default 25). The systemd template is `ops/skyterminal-collector.service`; it is not installed automatically.
 
 ## Sources
 
