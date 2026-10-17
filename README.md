@@ -14,6 +14,8 @@ bin/start-detached.sh           # nohup launcher; PID/log under run/
 
 Environment: `DB_PATH`, `HOST` (default `127.0.0.1`), `PORT` (default `4180`), `COLLECTOR_API_TOKEN` (optional bearer token), and `SMOKE_SECONDS` (default 25). The systemd template is `ops/skyterminal-collector.service`; it is not installed automatically.
 
+For an HTTPS reverse proxy on a domain that already points to this VPS, run `sudo bash deploy/setup-reverse-proxy.sh collector.example.com`. The script installs Caddy, keeps the collector bound to `127.0.0.1:4180`, enables HTTPS, generates `/etc/skyterminal-collector.env` with mode `600`, and prints the Vercel variables to configure. Do not paste the token into chat.
+
 ## Sources
 
 Independent reconnecting WebSocket supervisors cover:
