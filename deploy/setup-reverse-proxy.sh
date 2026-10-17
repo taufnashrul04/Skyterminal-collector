@@ -59,11 +59,19 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now caddy
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a --delete --exclude='.git' --exclude='data' --exclude='run' ./ /opt/skyterminal-collector/
+else
+  apt-get install -y rsync
+  rsync -a --delete --exclude='.git' --exclude='data' --exclude='run' ./ /opt/skyterminal-collector/
+fi
+chown -R skycollector:skycollector /opt/skyterminal-collector
 systemctl restart skyterminal-collector
+systemctl enable --now caddy
 systemctl reload caddy
 sleep 2
-curl -fsS "http://127.0.0.1:$APP_PORT/health" >/tmp/skyterminal-collector-health.json
+TOKEN="$(sed -n 's/^COLLECTOR_API_TOKEN=//p' "$ENV_FILE")"
+curl -fsS -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$APP_PORT/health" >/tmp/skyterminal-collector-health.json
 printf 'Collector local health: '
 cat /tmp/skyterminal-collector-health.json
 printf '\nHTTPS hostname: https://%s\n' "$DOMAIN"
