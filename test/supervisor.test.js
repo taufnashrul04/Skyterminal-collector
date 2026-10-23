@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import { BatchWriter, SourceSupervisor, backoffMs } from '../src/supervisor.js';
+import { OpenInterestPoller } from '../src/pollers.js';
 
 test('backoff is exponential and capped',()=>{assert.equal(backoffMs(0,()=>0),500);assert.equal(backoffMs(3,()=>0),4000);assert.equal(backoffMs(99,()=>0),30000);});
 
@@ -13,3 +14,31 @@ test('open source with no events becomes degraded instead of healthy',async()=>{
 test('plain text websocket pong is ignored without degrading source',async()=>{const states=[];const s=new SourceSupervisor({name:'pong',url:'wss://pong',subscribe:()=>[],normalize:()=>[],db:{setHealth:(...x)=>states.push(x)},writer:{add(){}},WebSocketImpl:class extends EventTarget{readyState=1;constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('open')))}send(){}close(){}},heartbeatMs:10000});s.start();await new Promise(r=>setTimeout(r,2));s.ws.dispatchEvent(new MessageEvent('message',{data:'pong'}));await new Promise(r=>setTimeout(r,2));assert.equal(states.at(-1)[1],'connected');s.stop();});
 
 test('late websocket error after stop does not touch a closed database',async()=>{class LateSocket extends EventTarget{readyState=1;constructor(){super();queueMicrotask(()=>this.dispatchEvent(new Event('open')));}send(){}close(){setTimeout(()=>this.dispatchEvent(new Event('error')),2);}}let closed=false;const db={setHealth:()=>{if(closed)throw new Error('database is not open');}};const s=new SourceSupervisor({name:'late',url:'wss://late',subscribe:()=>[],normalize:()=>[],db,writer:{add(){}},WebSocketImpl:LateSocket});s.start();await new Promise(r=>setTimeout(r,1));s.stop();closed=true;await new Promise(r=>setTimeout(r,5));assert.equal(s.stopped,true);});
+
+test('open interest poller does not write after stop', async () => {
+  let release; const inFlight = new Promise((r) => { release = r; });
+  let closed = false;
+  const db = { insertOpenInterest(){ if(closed) throw new Error('database is not open'); return 1; },
+               setHealth(){ if(closed) throw new Error('database is not open'); } };
+  const poller = new OpenInterestPoller({ name:'t-oi', intervalMs: 60_000, db,
+    fetchOi: async () => { await inFlight; return [{venue:'okx',symbol:'BTC',oi:'1'}]; } });
+  poller.stopped = false;
+  const tick = poller.tick();
+  poller.stopped = true; closed = true;           // service shuts down mid-request
+  release();
+  assert.equal(await tick, 0, 'a tick that lands after stop must write nothing');
+});
+
+test('open interest poller trims venue precision to the storage scale', async () => {
+  const written = [];
+  const db = { insertOpenInterest(rows){ written.push(...rows); return rows.length; }, setHealth(){} };
+  // OKX really does return values like this; the store only holds 8 decimals.
+  const poller = new OpenInterestPoller({ name:'t', intervalMs: 60_000, db,
+    fetchOi: async () => [{venue:'okx',symbol:'BTC',oi:'31349.5305000001251'},
+                          {venue:'okx',symbol:'ETH',oi:'0'}] });
+  poller.stopped = false;
+  await poller.tick();
+  assert.equal(written.length, 1, 'a zero sample is dropped rather than failing the batch');
+  assert.equal(written[0].oi, '31349.53050000');
+  assert.ok(written[0].tsUs > 0);
+});
