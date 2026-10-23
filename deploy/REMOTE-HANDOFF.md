@@ -50,9 +50,13 @@ The installer:
 
 ```bash
 sudo systemctl status skyterminal-collector --no-pager
-curl -fsS http://127.0.0.1:4180/health
+TOKEN="$(sudo sed -n 's/^COLLECTOR_API_TOKEN=//p' /etc/skyterminal-collector.env)"
+curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4180/health
 sudo journalctl -u skyterminal-collector -n 80 --no-pager
 ```
+
+Auth is checked before routing, so every path returns 401 without the token — including
+one that does not exist. A 401 says nothing about whether a route is deployed.
 
 Expected service state: `active (running)`.
 
@@ -68,6 +72,9 @@ GET /v1/footprint
 GET /v1/profile/volume
 GET /v1/profile/tpo
 GET /v1/liquidations
+GET /v1/liquidations/heatmap
+GET /v1/liquidations/levels
+GET /v1/liquidations/map
 ```
 
 Supported assets: `BTC`, `ETH`, `SOL`, `HYPE`.
@@ -76,12 +83,25 @@ Do not expose port `4180` directly to the internet. Put an HTTPS reverse proxy a
 
 ## Updates
 
+systemd runs from `/opt/skyterminal-collector`, not from the checkout. Pulling without
+the rsync restarts the same code that was already running, which is how a deployment
+silently falls behind.
+
 ```bash
 cd /home/ubuntu/Skyterminal-collector
 git pull --ff-only origin main
+sudo rsync -a --delete --exclude='.git' --exclude='data' --exclude='run' ./ /opt/skyterminal-collector/
+sudo chown -R skycollector:skycollector /opt/skyterminal-collector
 sudo systemctl restart skyterminal-collector
-curl -fsS http://127.0.0.1:4180/health
+
+TOKEN="$(sudo sed -n 's/^COLLECTOR_API_TOKEN=//p' /etc/skyterminal-collector.env)"
+curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:4180/health
 ```
+
+Because the sync excludes `.git`, git inside `/opt` stays pinned to the commit installed
+first and reports later files as modified. That is expected, not a set of local edits.
+
+For a release that also changes stored data, follow `DEPLOY-RUNBOOK.md` instead.
 
 ## Operational checks
 
