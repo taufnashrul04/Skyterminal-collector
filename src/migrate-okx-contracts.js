@@ -3,6 +3,11 @@
 // because instType=SWAP mixes linear and inverse contracts and `markets.source_symbol`
 // collapses both into one row, so there is no way to tell afterwards which rule applied.
 //
+// Run it with the collector STOPPED and before the new code starts writing: it rescales
+// every active OKX perp row, so rows already written in base currency would be scaled a
+// second time. A marker in schema_migrations makes a repeat run refuse rather than
+// silently halve the data again; --force is there only for a re-run after a restore.
+//
 // Dry run by default. Pass --apply to write.
 import { resolve } from 'node:path';
 import { CollectorDb } from './db.js';
@@ -16,7 +21,9 @@ function ratio(ctVal) {
   return { num: BigInt(whole + frac), den: 10n ** BigInt(frac.length) };
 }
 
-export async function migrate({ dbPath, apply = false, fetchImpl = fetch, log = console.log } = {}) {
+export const MIGRATION_VERSION = 2;
+
+export async function migrate({ dbPath, apply = false, force = false, fetchImpl = fetch, log = console.log } = {}) {
   await loadOkxContracts({ fetchImpl });
   const { okxBaseQty } = await import('./okx-contracts.js');
 
@@ -28,6 +35,14 @@ export async function migrate({ dbPath, apply = false, fetchImpl = fetch, log = 
     const one = okxBaseQty(`${code}-USDT-SWAP`, '1', 1);
     if (one == null) throw new Error(`no contract spec for ${code}-USDT-SWAP`);
     scale.set(code, ratio(one.replace(/0+$/, '').replace(/\.$/, '')));
+  }
+
+  const [done] = rows('SELECT count(*) n FROM schema_migrations WHERE version=?', MIGRATION_VERSION);
+  if (Number(done.n) > 0 && !force) {
+    log(`Already applied (schema_migrations ${MIGRATION_VERSION}). Re-running would rescale rows that are already in base currency.`);
+    log('Pass --force only if you have restored a pre-migration database.');
+    db.close();
+    return { applied: false, alreadyApplied: true, trades: 0n, liquidations: 0n };
   }
 
   const markets = rows(`SELECT m.market_id,a.code asset FROM markets m
@@ -67,6 +82,8 @@ export async function migrate({ dbPath, apply = false, fetchImpl = fetch, log = 
     }
     db.db.prepare(`UPDATE liquidations SET is_active=0 WHERE is_active=1 AND market_id IN (
       SELECT m.market_id FROM markets m JOIN venues v USING(venue_id) WHERE v.code='okx' AND m.market_kind='perp')`).run();
+    // Same transaction as the rescale, so the marker cannot outlive a rolled-back write.
+    db.db.prepare("INSERT OR REPLACE INTO schema_migrations VALUES(?,datetime('now'))").run(MIGRATION_VERSION);
   });
 
   log(`\nAPPLIED — rescaled ${totalRows} trade rows, retired ${liq.n} liquidation rows.`);
@@ -78,5 +95,6 @@ if (process.argv[1]?.endsWith('migrate-okx-contracts.js')) {
   await migrate({
     dbPath: process.env.DB_PATH ?? resolve('data/skyterminal.db'),
     apply: process.argv.includes('--apply'),
+    force: process.argv.includes('--force'),
   });
 }
