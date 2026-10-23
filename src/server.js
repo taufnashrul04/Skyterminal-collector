@@ -20,19 +20,34 @@ function loadOi(db,q){const sql=`SELECT oi.ts_event_us ts,sum(oi.oi_base_i) oi F
  return rows(db.db.prepare(sql),q.asset,BigInt(q.fromMs)*1000n,BigInt(q.toMs)*1000n).map(x=>({tsMs:Number(x.ts/1000n),oi:Number(x.oi)/1e8}));}
 
 // One bucket per time slice carrying what the model needs: the traded range, the price
-// positions would have opened at, the aggressor split, and the buildup itself.
+// positions would have opened at, and the aggressor split. Aggregated in SQL rather than
+// by pulling every trade into memory — a 24h window is hundreds of thousands of rows, and
+// filtering that list once per bucket was quadratic enough to blow the client's timeout.
+// Perp only: leverage, and therefore liquidation, lives there.
 function modelBuckets(db,q,bucketMs){
- const trades=loadTrades(db,q);
+ const n=Math.max(1,Math.ceil((q.toMs-q.fromMs)/bucketMs));
+ const sql=`SELECT CAST((t.ts_event_us/1000 - ?)/? AS INTEGER) b,
+   max(t.price_i) hi,min(t.price_i) lo,
+   sum(CASE WHEN t.aggressor_side=1 THEN t.base_qty_i ELSE 0 END) buy,
+   sum(CASE WHEN t.aggressor_side=-1 THEN t.base_qty_i ELSE 0 END) sell,
+   sum(t.base_qty_i) base,sum(t.quote_qty_i) quote
+  FROM trades t JOIN markets m USING(market_id) JOIN assets a USING(asset_id)
+  WHERE t.is_active=1 AND a.code=? AND m.market_kind='perp'
+    AND t.ts_event_us>=? AND t.ts_event_us<?
+  GROUP BY b`;
+ const agg=new Map();
+ for(const r of rows(db.db.prepare(sql),BigInt(q.fromMs),BigInt(bucketMs),q.asset,BigInt(q.fromMs)*1000n,BigInt(q.toMs)*1000n)){
+  agg.set(Number(r.b),r);
+ }
  const oi=loadOi(db,q);
  const out=[];
  let oiIdx=0,prevOi=null;
- for(let start=q.fromMs;start<q.toMs;start+=bucketMs){
-  const end=Math.min(q.toMs,start+bucketMs);
-  const inBucket=trades.filter(t=>t.tsMs>=start&&t.tsMs<end);
-  let hi=null,lo=null,buy=0,sell=0,quote=0,base=0,close=null;
-  for(const t of inBucket){const px=Number(t.price)/1e8,sz=Number(t.qty)/1e8;
-   if(hi===null||px>hi)hi=px; if(lo===null||px<lo)lo=px; close=px;
-   if(t.side===1)buy+=sz; else if(t.side===-1)sell+=sz; base+=sz; quote+=px*sz;}
+ for(let i=0;i<n;i++){
+  const start=q.fromMs+i*bucketMs,end=Math.min(q.toMs,start+bucketMs);
+  const a=agg.get(i);
+  const base=a?Number(a.base)/1e8:0;
+  const quote=a?Number(a.quote)/1e8:0;
+  const vwap=base>0?quote/base:null;
   // Latest OI sample at or before this bucket's end.
   let oiNow=prevOi;
   while(oiIdx<oi.length&&oi[oiIdx].tsMs<end){oiNow=oi[oiIdx].oi;oiIdx++;}
@@ -40,7 +55,10 @@ function modelBuckets(db,q,bucketMs){
   if(prevOi!=null&&oiNow!=null){const d=oiNow-prevOi;buildup=d>0?d:0;source='oi';}
   else if(base>0){buildup=base*0.1;source='volume';}  // proxy: a slice of turnover stands in for new positions
   if(oiNow!=null)prevOi=oiNow;
-  out.push({startMs:start,endMs:end,high:hi,low:lo,close,vwap:base>0?quote/base:close,buyVolume:buy,sellVolume:sell,buildup,source});
+  out.push({startMs:start,endMs:end,
+   high:a?Number(a.hi)/1e8:null,low:a?Number(a.lo)/1e8:null,close:vwap,vwap,
+   buyVolume:a?Number(a.buy)/1e8:0,sellVolume:a?Number(a.sell)/1e8:0,
+   buildup,source});
  }
  return out;
 }
