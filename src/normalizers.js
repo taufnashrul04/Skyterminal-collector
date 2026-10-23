@@ -33,3 +33,30 @@ export function normalizeOkx(msg,recv){
  }
  return [];
 }
+
+export function normalizeBitget(msg,recv){
+ const instId=msg.arg?.instId;
+ if(msg.arg?.channel!=='trade'||!asset(instId))return [];
+ return (msg.data??[]).map(x=>trade({venue:'bitget',symbol:instId,marketKind:'perp',id:x.tradeId,seq:x.tradeId,ts:x.ts,recv,side:x.side==='buy'?1:x.side==='sell'?-1:0,price:x.price,qty:x.size}));
+}
+
+export function normalizeCoinbase(msg,recv){
+ if((msg.type!=='match'&&msg.type!=='last_match')||!asset(msg.product_id))return [];
+ // Coinbase reports `side` as the resting MAKER's side, so the aggressor is the opposite
+ // of what every other venue here means by the same field.
+ return [trade({venue:'coinbase',symbol:msg.product_id,marketKind:'spot',id:msg.trade_id,seq:msg.sequence,ts:Date.parse(msg.time),recv,side:msg.side==='sell'?1:msg.side==='buy'?-1:0,price:msg.price,qty:msg.size})];
+}
+
+export function normalizeDeribit(msg,recv){
+ const data=msg?.params?.data;if(!Array.isArray(data))return [];
+ const out=[];
+ for(const t of data){
+  const name=t.instrument_name;if(!asset(name))continue;
+  // `amount` is USD notional on the inverse BTC/ETH perpetuals but base currency on the
+  // USDC-margined linear ones; the instrument name is what distinguishes them.
+  const qty=(/_USDC-/.test(name)?t.amount:t.amount/t.price).toFixed(8);
+  if(!(Number(qty)>0))continue;
+  out.push(trade({venue:'deribit',symbol:name,marketKind:'perp',id:t.trade_id,seq:t.trade_seq,ts:t.timestamp,recv,side:t.direction==='buy'?1:t.direction==='sell'?-1:0,price:t.price,qty}));
+ }
+ return out;
+}
