@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { okxBaseQty } from './okx-contracts.js';
 
 const DECIMAL=/^(?:0|[1-9]\d*)(?:\.\d+)?$/;
 function decimal(v,name='decimal'){const s=String(v);if(!DECIMAL.test(s)||Number(s)<=0)throw new TypeError(`invalid ${name} decimal`);return s;}
@@ -27,9 +28,27 @@ export function normalizeBybit(msg,recv,category){
 
 export function normalizeOkx(msg,recv){
  const channel=msg.arg?.channel;
- if(channel==='trades-all')return (msg.data??[]).filter(x=>asset(x.instId)).map(x=>trade({venue:'okx',symbol:x.instId,marketKind:x.instId.endsWith('-SWAP')?'perp':'spot',id:x.tradeId,seq:x.seqId,ts:x.ts,recv,side:x.side==='buy'?1:x.side==='sell'?-1:0,price:x.px,qty:x.sz}));
+ if(channel==='trades-all'){
+  const out=[];
+  for(const x of msg.data??[]){
+   if(!asset(x.instId))continue;
+   // Swap sizes arrive in contracts; okxBaseQty converts them and returns null for an
+   // instrument we have no spec for, which drops the event rather than mis-scaling it.
+   const qty=okxBaseQty(x.instId,x.sz,x.px);if(qty==null)continue;
+   out.push(trade({venue:'okx',symbol:x.instId,marketKind:x.instId.endsWith('-SWAP')?'perp':'spot',id:x.tradeId,seq:x.seqId,ts:x.ts,recv,side:x.side==='buy'?1:x.side==='sell'?-1:0,price:x.px,qty}));
+  }
+  return out;
+ }
  if(channel==='liquidation-orders'){
-  const out=[];for(const group of msg.data??[])for(const x of group.details??[])if(asset(group.instId))out.push(liq({venue:'okx',symbol:group.instId,id:key('liq:',{i:group.instId,...x}),ts:x.ts,recv,eventKind:'summary',liquidatedSide:x.side==='sell'?'long':x.side==='buy'?'short':'unknown',priceKind:'bankruptcy',price:x.bkPx,qty:x.sz}));return out;
+  const out=[];
+  for(const group of msg.data??[])for(const x of group.details??[]){
+   if(!asset(group.instId))continue;
+   // instType=SWAP also delivers inverse contracts (BTC-USD-SWAP is 100 USD each), so
+   // the bankruptcy price is needed to express those in base currency.
+   const qty=okxBaseQty(group.instId,x.sz,x.bkPx);if(qty==null)continue;
+   out.push(liq({venue:'okx',symbol:group.instId,id:key('liq:',{i:group.instId,...x}),ts:x.ts,recv,eventKind:'summary',liquidatedSide:x.side==='sell'?'long':x.side==='buy'?'short':'unknown',priceKind:'bankruptcy',price:x.bkPx,qty}));
+  }
+  return out;
  }
  return [];
 }

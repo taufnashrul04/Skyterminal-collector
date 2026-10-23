@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeHyperliquid, normalizeBinance, normalizeBybit, normalizeOkx } from '../src/normalizers.js';
+import { setOkxContracts } from '../src/okx-contracts.js';
 
 const recv = 1700000000999000;
 
@@ -30,9 +31,19 @@ test('Bybit trades and allLiquidation retain execution versus order caveat', () 
 });
 
 test('OKX trades-all and liquidation summary preserve semantics', () => {
+  setOkxContracts([['BTC-USDT-SWAP',{ctVal:0.01,ctMult:1,inverse:false}]]);
   const t = normalizeOkx({arg:{channel:'trades-all',instId:'BTC-USDT-SWAP'},data:[{instId:'BTC-USDT-SWAP',tradeId:'55',px:'102',sz:'4',side:'buy',ts:'1700000000000'}]},recv)[0];
   const l = normalizeOkx({arg:{channel:'liquidation-orders'},data:[{instId:'BTC-USDT-SWAP',details:[{side:'sell',bkPx:'90',sz:'3',ts:'1700000000000'}]}]},recv)[0];
-  assert.equal(t.marketKind,'perp'); assert.equal(t.side,1); assert.equal(l.eventKind,'summary'); assert.equal(l.liquidatedSide,'long'); assert.equal(l.priceKind,'bankruptcy');
+  assert.equal(t.marketKind,'perp'); assert.equal(t.side,1); assert.equal(Number(t.qty),0.04,'4 contracts at 0.01 BTC each');
+  assert.equal(l.eventKind,'summary'); assert.equal(l.liquidatedSide,'long'); assert.equal(l.priceKind,'bankruptcy'); assert.equal(Number(l.qty),0.03);
+});
+
+test('OKX swap events are dropped rather than stored in contract units when the spec is missing', () => {
+  setOkxContracts([]);
+  assert.deepEqual(normalizeOkx({arg:{channel:'trades-all'},data:[{instId:'BTC-USDT-SWAP',tradeId:'1',px:'102',sz:'4',side:'buy',ts:'1700000000000'}]},recv),[]);
+  assert.deepEqual(normalizeOkx({arg:{channel:'liquidation-orders'},data:[{instId:'BTC-USDT-SWAP',details:[{side:'sell',bkPx:'90',sz:'3',ts:'1700000000000'}]}]},recv),[]);
+  const spot=normalizeOkx({arg:{channel:'trades-all'},data:[{instId:'BTC-USDT',tradeId:'9',px:'102',sz:'0.4',side:'buy',ts:'1700000000000'}]},recv);
+  assert.equal(spot.length,1,'spot never depended on contract specs');
 });
 
 test('normalizers reject invalid finite decimal values and use unknown side', () => {
